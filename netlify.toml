@@ -1,6 +1,9 @@
 [build]
-  publish = "."
-  command = "echo 'Static site - no build needed'"
+  publish = "dist"
+  command = "mkdir -p dist && cp index.html dist/ && cp -r public/* dist/ 2>/dev/null || true"
+
+# No Next.js plugin needed - this is a static HTML site
+# If you see build errors, remove "@netlify/plugin-nextjs" from Netlify Dashboard
 
 # Redirect all traffic to index.html for SPA behavior
 [[redirects]]
