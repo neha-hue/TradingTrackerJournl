@@ -3,7 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
+export const SUPABASE_CONFIGURED = !!(supabaseUrl && supabaseAnonKey);
+
+if (!SUPABASE_CONFIGURED) {
   console.warn('Supabase URL or Anon Key is missing. Check your .env.local file.');
 }
 
@@ -17,9 +19,16 @@ export const AUTO_LOGIN_EMAIL = import.meta.env.VITE_AUTO_LOGIN_EMAIL || '';
 export const AUTO_LOGIN_PASSWORD = import.meta.env.VITE_AUTO_LOGIN_PASSWORD || '';
 export const AUTO_LOGIN_ENABLED = !!(AUTO_LOGIN_EMAIL && AUTO_LOGIN_PASSWORD);
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true
+// Fall back to placeholders when unconfigured: createClient() throws on an empty URL,
+// and a module-level throw leaves nothing but a blank page. With these the app still
+// mounts and can explain what is missing - see SUPABASE_CONFIGURED in App.tsx.
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-anon-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true
+    }
   }
-});
+);
