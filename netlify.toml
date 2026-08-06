@@ -1,11 +1,14 @@
 [build]
+  command = "npm run build"
   publish = "dist"
-  command = "mkdir -p dist && cp index.html dist/ && cp -r public/* dist/ 2>/dev/null || true"
 
-# No Next.js plugin needed - this is a static HTML site
-# If you see build errors, remove "@netlify/plugin-nextjs" from Netlify Dashboard
+[build.environment]
+  # Vite inlines VITE_* values into the client bundle by design, which otherwise trips
+  # Netlify's secrets scanner and fails the build. Both of these are meant to be public:
+  # the Supabase URL, and the publishable anon key that RLS policies are enforced against.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
 
-# Redirect all traffic to index.html for SPA behavior
+# Redirect all traffic to index.html for SPA routing (React Router or custom routing)
 [[redirects]]
   from = "/*"
   to = "/index.html"
