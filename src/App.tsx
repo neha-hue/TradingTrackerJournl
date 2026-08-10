@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { SUPABASE_CONFIGURED } from './lib/supabase';
 import AuthPage from './components/Auth/AuthPage';
@@ -18,6 +18,10 @@ import WeeklyResults from './components/Results/WeeklyResults';
 import MonthlyResults from './components/Results/MonthlyResults';
 import QuarterlyResults from './components/Results/QuarterlyResults';
 import Calculators from './components/Calculators/Calculators';
+
+// The importer pulls in the OCR engine, which outweighs the rest of the app. Loading it
+// only when the page is opened keeps the dashboard quick, especially on a phone.
+const ImportPage = React.lazy(() => import('./components/Import/ImportPage'));
 
 const MainApp: React.FC = () => {
   const { user, loading, authError, page, setPage, trades, accounts, deleteTrade } = useApp();
@@ -97,6 +101,8 @@ const MainApp: React.FC = () => {
             }}
           />
         );
+      case 'import':
+        return <ImportPage />;
       case 'weekly':
         return <WeeklyResults />;
       case 'monthly':
@@ -129,7 +135,15 @@ const MainApp: React.FC = () => {
         <Topbar onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
         
         <main className="page active">
-          {renderActivePage()}
+          <Suspense
+            fallback={
+              <div className="text-center py-16 text-secondary">
+                <i className="fa-solid fa-spinner fa-spin fa-2x text-accent"></i>
+              </div>
+            }
+          >
+            {renderActivePage()}
+          </Suspense>
         </main>
       </div>
 
