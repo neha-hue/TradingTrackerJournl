@@ -6,6 +6,8 @@ import {
   AUTO_LOGIN_ENABLED
 } from '../lib/supabase';
 import { Account, Trade, Screenshot } from '../lib/types';
+import { uploadScreenshot } from '../lib/storage';
+import { TradeDraft } from '../lib/importer/types';
 import { User } from '@supabase/supabase-js';
 
 interface Toast {
@@ -37,8 +39,28 @@ interface AppContextType {
   updateTrade: (id: string, trade: Partial<Trade>) => Promise<void>;
   deleteTrade: (id: string) => Promise<void>;
   bulkDeleteTrades: (ids: string[]) => Promise<void>;
+  importTrades: (
+    items: ImportItem[],
+    onProgress?: (done: number, total: number) => void
+  ) => Promise<ImportOutcome>;
+  ensureStrategy: (name: string) => Promise<void>;
   signOut: () => Promise<void>;
   seedDemoData: () => Promise<void>;
+}
+
+/** One trade to write, with the screenshot that was paired with it. */
+export interface ImportItem {
+  trade: TradeDraft;
+  accountId: string;
+  file: File | null;
+  /** Identifies the item in the outcome report - the CSV row number. */
+  ref: number;
+}
+
+export interface ImportOutcome {
+  imported: number;
+  screenshotsAttached: number;
+  failures: { ref: number; error: string }[];
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -538,6 +560,137 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  /** Adds a strategy if the list does not already carry it. Used by the importer. */
+  const ensureStrategy = async (name: string) => {
+    const trimmed = name.trim();
+    if (!user || !trimmed || strategies.includes(trimmed)) return;
+    try {
+      const { error } = await supabase.from('strategies').insert([{ user_id: user.id, name: trimmed }]);
+      if (error) throw error;
+      setStrategies(prev => [...prev, trimmed]);
+    } catch {
+      // A missing strategy only affects the Trade Form dropdown; the trade still saves
+      // with it as free text, so this is not worth failing an import over.
+    }
+  };
+
+  /**
+   * Writes a batch of confirmed trades, each with the screenshot it was paired with.
+   *
+   * One trade at a time, so progress is honest and Storage is not swamped. A bad row
+   * never takes the batch down - its error is collected and the run carries on. When an
+   * upload fails the trade is still saved and the failure reported: losing a trade to
+   * save an image would be the wrong way round, and the image can be attached later by
+   * editing the trade.
+   */
+  const importTrades = async (
+    items: ImportItem[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<ImportOutcome> => {
+    const outcome: ImportOutcome = { imported: 0, screenshotsAttached: 0, failures: [] };
+    if (!user) {
+      outcome.failures.push({ ref: 0, error: 'Not signed in' });
+      return outcome;
+    }
+
+    const created: Trade[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const t = item.trade;
+      try {
+        const { data: dbTrade, error } = await supabase
+          .from('trades')
+          .insert([{
+            user_id: user.id,
+            account_id: item.accountId,
+            date: t.date,
+            instrument: t.instrument,
+            direction: t.direction,
+            session: t.session,
+            entry: t.entry,
+            exit_price: t.exit_price,
+            sl: t.sl,
+            tp: t.tp,
+            lots: t.lots,
+            pl: t.pl,
+            risk: t.risk,
+            rr: t.rr,
+            setup: t.setup,
+            result: t.result,
+            // grade, emotion_* and the note columns are left unset on purpose. grade in
+            // particular carries a CHECK constraint of 'A'..'F', which an empty string
+            // would violate - NULL is the only valid "not recorded".
+            grade: null,
+            emotion_before: null,
+            emotion_after: null,
+            mistakes: null,
+            pre_notes: null,
+            post_notes: null
+          }])
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        const screenshots: Screenshot[] = [];
+        if (item.file) {
+          try {
+            const url = await uploadScreenshot(item.file);
+            // trade_screenshots RLS resolves through trades.user_id, so the trade has to
+            // exist before its screenshot row can be written.
+            const { error: shotError } = await supabase
+              .from('trade_screenshots')
+              .insert([{ trade_id: dbTrade.id, url, name: item.file.name }]);
+            if (shotError) throw shotError;
+
+            screenshots.push({ dataUrl: url, name: item.file.name });
+            outcome.screenshotsAttached++;
+          } catch (shotErr: any) {
+            outcome.failures.push({
+              ref: item.ref,
+              error: `Trade saved, but the screenshot could not be attached: ${shotErr.message || shotErr}`
+            });
+          }
+        }
+
+        created.push({
+          id: dbTrade.id,
+          accountId: item.accountId,
+          date: t.date,
+          instrument: t.instrument,
+          direction: t.direction,
+          session: t.session,
+          entry: t.entry?.toString() ?? '',
+          exit: t.exit_price?.toString() ?? '',
+          sl: t.sl?.toString() ?? '',
+          tp: t.tp?.toString() ?? '',
+          lots: t.lots?.toString() ?? '',
+          pl: t.pl,
+          risk: t.risk?.toString() ?? '',
+          rr: t.rr?.toString() ?? '',
+          setup: t.setup,
+          result: t.result,
+          grade: '',
+          emotionBefore: '',
+          emotionAfter: '',
+          mistakes: '',
+          preNotes: '',
+          postNotes: '',
+          screenshots
+        });
+        outcome.imported++;
+      } catch (err: any) {
+        outcome.failures.push({ ref: item.ref, error: err.message || String(err) });
+      }
+
+      onProgress?.(i + 1, items.length);
+    }
+
+    if (created.length > 0) setTrades(prev => [...created, ...prev]);
+    return outcome;
+  };
+
   const signOut = async () => {
     // Leave autoLoginRef resolved so the sign-out is not immediately undone by a
     // fresh auto sign-in; a page reload starts the cycle over.
@@ -627,6 +780,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateTrade,
       deleteTrade,
       bulkDeleteTrades,
+      importTrades,
+      ensureStrategy,
       signOut,
       seedDemoData
     }}>
