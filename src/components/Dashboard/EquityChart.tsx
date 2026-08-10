@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Trade } from '../../lib/types';
 import { cc } from '../../lib/utils';
 import { Chart, registerables } from 'chart.js';
@@ -13,23 +13,16 @@ interface EquityChartProps {
 export const EquityChart: React.FC<EquityChartProps> = ({ trades, theme }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
-  const [period, setPeriod] = useState<'all' | '1w' | '1m' | '3m'>('all');
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    // Filter and sort trades by date ascending
-    const sorted = [...trades].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    let filtered = sorted;
-    const now = new Date();
-
-    if (period === '1w') {
-      filtered = sorted.filter(t => new Date(t.date) >= new Date(now.getTime() - 7 * 86400000));
-    } else if (period === '1m') {
-      filtered = sorted.filter(t => new Date(t.date) >= new Date(now.getTime() - 30 * 86400000));
-    } else if (period === '3m') {
-      filtered = sorted.filter(t => new Date(t.date) >= new Date(now.getTime() - 90 * 86400000));
-    }
+    // The dashboard has already narrowed these to one month, so the curve is simply that
+    // month in order. The old 1W/1M/3M buttons counted back from today, which would have
+    // emptied the chart on every past month.
+    const filtered = [...trades].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
 
     let cum = 0;
     const labels: string[] = [];
@@ -119,7 +112,7 @@ export const EquityChart: React.FC<EquityChartProps> = ({ trades, theme }) => {
         chartRef.current = null;
       }
     };
-  }, [trades, theme, period]);
+  }, [trades, theme]);
 
   return (
     <div className="card">
@@ -127,17 +120,7 @@ export const EquityChart: React.FC<EquityChartProps> = ({ trades, theme }) => {
         <h3 className="card-title">
           <i className="fa-solid fa-chart-line"></i> Equity Curve
         </h3>
-        <div className="period-tabs">
-          {(['all', '1w', '1m', '3m'] as const).map((p) => (
-            <button
-              key={p}
-              className={`period-tab ${period === p ? 'active' : ''}`}
-              onClick={() => setPeriod(p)}
-            >
-              {p.toUpperCase()}
-            </button>
-          ))}
-        </div>
+        <span className="text-muted text-[11.5px]">Running total for the month</span>
       </div>
       <div className="chart-container-lg">
         <canvas ref={canvasRef}></canvas>
