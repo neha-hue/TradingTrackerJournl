@@ -8,9 +8,11 @@
     "dev:client": "vite",
     "dev:server": "tsx watch server/index.ts",
     "build": "tsc && vite build",
+    "build:share": "tsc && vite build --mode share",
     "preview": "vite preview",
     "server": "tsx server/index.ts",
     "db:migrate": "tsx server/db/migrate.ts",
+    "share": "tsx scripts/share.ts",
     "backup": "tsx scripts/backup.ts",
     "restore": "tsx scripts/restore.ts"
   },

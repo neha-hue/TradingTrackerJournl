@@ -16,7 +16,13 @@ const getUserByEmail = db.prepare('SELECT * FROM users WHERE email = ?');
 const getUserById = db.prepare('SELECT * FROM users WHERE id = ?');
 const insertUser = db.prepare('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)');
 
+// Off when the server is reachable from the internet (see npm run share), where an open
+// registration endpoint would let anyone create accounts on this machine.
+const ALLOW_SIGNUP = process.env.ALLOW_SIGNUP !== 'false';
+
 authRouter.post('/signup', ah(async (req, res) => {
+  if (!ALLOW_SIGNUP) throw new HttpError(403, 'Sign-ups are disabled on this server');
+
   const { email, password } = req.body || {};
   if (!email || !password) throw new HttpError(400, 'Email and password are required');
   if (String(password).length < 6) throw new HttpError(400, 'Password must be at least 6 characters');

@@ -50,6 +50,30 @@ On a brand-new database this account is created automatically on first run; on l
 - `npm run build` - type-checks and builds the frontend to `dist/` (frontend only).
 - `npm run db:migrate` - (re-)applies `server/db/schema.sql`. Safe to run any time; it only creates tables that don't already exist.
 
+## Opening it on a phone
+
+```bash
+npm run build:share   # once, and again after any frontend change
+npm run share         # prints a public https://....trycloudflare.com URL
+```
+
+This serves the built frontend, the API and the screenshots from the one Express process
+on port 3001 and points a free Cloudflare quick tunnel at it - one origin, so the session
+cookie works with no CORS setup. Your laptop has to stay on with `npm run share` running;
+Ctrl+C closes the tunnel. The URL is new every run.
+
+Two things differ from `npm run dev`, because anyone with the URL can reach it:
+
+- the frontend is built with `--mode share`, which blanks `VITE_AUTO_LOGIN_*`. Vite inlines
+  every `VITE_*` value into the JS bundle, so a normal build would publish the auto-login
+  password to anyone who opened the URL. The shared build shows a login screen instead.
+- `ALLOW_SIGNUP=false`, so nobody can register an account on your machine.
+
+Treat the URL as a secret while it is live - it is unguessable, but it is the only thing
+standing in front of the login page.
+
+Needs `cloudflared`: `winget install --id Cloudflare.cloudflared --source winget`
+
 ## Backups
 
 ```bash
