@@ -1,6 +1,5 @@
 import React, { useState, Suspense } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
-import { SUPABASE_CONFIGURED } from './lib/supabase';
 import AuthPage from './components/Auth/AuthPage';
 import Sidebar from './components/Layout/Sidebar';
 import Topbar from './components/Layout/Topbar';
@@ -30,24 +29,6 @@ const MainApp: React.FC = () => {
   const [editTradeId, setEditTradeId] = useState<string | null>(null);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
-  // Without these the Supabase client cannot talk to anything, so say so plainly
-  // rather than sitting on a spinner or a blank page.
-  if (!SUPABASE_CONFIGURED) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] p-6">
-        <div className="text-center max-w-md">
-          <i className="fa-solid fa-plug-circle-xmark fa-3x text-danger mb-4"></i>
-          <h3 className="mb-2">Database not configured</h3>
-          <p className="text-secondary text-[13px]">
-            <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> were missing
-            when this site was built. Set them in your hosting provider's environment
-            variables (or <code>.env.local</code> when running locally) and rebuild.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -59,8 +40,9 @@ const MainApp: React.FC = () => {
     );
   }
 
-  // Reached only when auto sign-in is off (the deployed build) or it failed.
-  // Supabase stores the session in localStorage, so this is asked once per device.
+  // Reached only when auto sign-in is off, it failed, or the local server could not be
+  // reached (see authError). The session is a server-side cookie, so once signed in this
+  // is not asked again on this device until the cookie expires or is cleared.
   if (!user) {
     return (
       <>

@@ -21,6 +21,11 @@
 /build
 /dist
 
+# local database + uploaded screenshots
+/server/data
+/server/uploads/*
+!/server/uploads/.gitkeep
+
 # misc
 .DS_Store
 *.pem

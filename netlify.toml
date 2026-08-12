@@ -2,11 +2,10 @@
   command = "npm run build"
   publish = "dist"
 
-[build.environment]
-  # Vite inlines VITE_* values into the client bundle by design, which otherwise trips
-  # Netlify's secrets scanner and fails the build. Both of these are meant to be public:
-  # the Supabase URL, and the publishable anon key that RLS policies are enforced against.
-  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
+# Note: this builds only the static frontend. The app now needs server/ (Express + SQLite)
+# running somewhere reachable at /api and /uploads for data to load - Netlify only serves
+# static files, so this config alone will show "Could not reach the local server" on a
+# deploy. Fine for local use; deploying the backend is a separate concern from this file.
 
 # Redirect all traffic to index.html for SPA routing (React Router or custom routing)
 [[redirects]]

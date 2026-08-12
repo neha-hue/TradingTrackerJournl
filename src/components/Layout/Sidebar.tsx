@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { AUTO_LOGIN_ENABLED } from '../../lib/supabase';
+import { AUTO_LOGIN_ENABLED } from '../../lib/config';
 import { Account } from '../../lib/types';
 import Modal from '../shared/Modal';
 

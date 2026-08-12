@@ -163,7 +163,7 @@ export const TradeForm: React.FC<TradeFormProps> = ({ editTradeId, onSuccess }) 
 
     setUploading(true);
     try {
-      // Upload new (blob) screenshots to Supabase Storage
+      // Upload new (blob) screenshots to the local server
       const uploadedShots: Screenshot[] = [];
       for (const shot of pendingShots) {
         if (shot.dataUrl.startsWith('blob:')) {

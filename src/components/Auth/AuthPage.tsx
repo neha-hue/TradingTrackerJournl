@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { supabase } from '../../lib/supabase';
 import { useApp } from '../../context/AppContext';
 
 interface AuthPageProps {
@@ -8,7 +7,7 @@ interface AuthPageProps {
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ authError }) => {
-  const { showToast } = useApp();
+  const { showToast, signIn, signUp } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -24,19 +23,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ authError }) => {
     setLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        showToast('Signup successful! Check email or sign in.', 'success');
-        setIsSignUp(false);
+        await signUp(email, password);
+        showToast('Account created!', 'success');
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        await signIn(email, password);
         showToast('Signed in successfully!', 'success');
       }
     } catch (err: any) {

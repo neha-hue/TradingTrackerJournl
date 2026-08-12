@@ -1,14 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import {
-  supabase,
-  AUTO_LOGIN_EMAIL,
-  AUTO_LOGIN_PASSWORD,
-  AUTO_LOGIN_ENABLED
-} from '../lib/supabase';
-import { Account, Trade, Screenshot } from '../lib/types';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { auth, bootstrap, accountsApi, strategiesApi, tradesApi } from '../lib/api';
+import type { SessionUser } from '../lib/api';
+import { AUTO_LOGIN_EMAIL, AUTO_LOGIN_PASSWORD, AUTO_LOGIN_ENABLED } from '../lib/config';
+import { Account, Trade } from '../lib/types';
 import { uploadScreenshot } from '../lib/storage';
 import { TradeDraft } from '../lib/importer/types';
-import { User } from '@supabase/supabase-js';
 
 interface Toast {
   msg: string;
@@ -16,7 +12,7 @@ interface Toast {
 }
 
 interface AppContextType {
-  user: User | null;
+  user: SessionUser | null;
   loading: boolean;
   authError: string | null;
   page: string;
@@ -30,6 +26,8 @@ interface AppContextType {
   toggleTheme: () => void;
   toast: Toast | null;
   showToast: (msg: string, type?: 'success' | 'error') => void;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   addAccount: (name: string, type: Account['type'], color: string) => Promise<void>;
   renameAccount: (id: string, name: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
@@ -71,10 +69,9 @@ const DEFAULT_STRATEGIES = [
 ];
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  const autoLoginRef = useRef<Promise<void> | null>(null);
   const [page, setPage] = useState('dashboard');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [currentAccId, setCurrentAccId] = useState<string>('');
@@ -109,56 +106,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('tv_theme', newTheme);
   };
 
-  // Silently sign into the single owner account. Runs at most once per page load;
-  // the resolved session arrives via onAuthStateChange below.
-  const ensureSignedIn = () => {
-    if (autoLoginRef.current) return autoLoginRef.current;
+  // Runs once per page load: check for an existing session, then fall back to
+  // auto sign-in (see lib/config.ts) if it's enabled, then the login screen.
+  useEffect(() => {
+    let cancelled = false;
 
-    autoLoginRef.current = (async () => {
-      if (!AUTO_LOGIN_ENABLED) {
-        // Expected on the deployed site - fall through to the login screen.
-        setLoading(false);
+    (async () => {
+      try {
+        const { user: sessionUser } = await auth.getSession();
+        if (cancelled) return;
+        if (sessionUser) {
+          setUser(sessionUser);
+          return;
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthError('Could not reach the local server. Is it running? (npm run dev:server)');
+          setLoading(false);
+        }
         return;
       }
 
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: AUTO_LOGIN_EMAIL,
-        password: AUTO_LOGIN_PASSWORD
-      });
-      if (data?.session) return;
+      if (!AUTO_LOGIN_ENABLED) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
 
-      // Deliberately no signUp() fallback here: on a wrong password Supabase would try to
-      // send a confirmation email and fail with "email rate limit exceeded", hiding the
-      // real cause. Create the account once in the Supabase dashboard instead.
-      setAuthError(
-        `${error?.message || 'Auto sign-in failed'} (${AUTO_LOGIN_EMAIL})`
-      );
-      setLoading(false);
+      try {
+        const signedInUser = await auth.signIn(AUTO_LOGIN_EMAIL, AUTO_LOGIN_PASSWORD);
+        if (!cancelled) setUser(signedInUser);
+        return;
+      } catch {
+        // Expected on a brand-new local database - there is no such account yet. Unlike
+        // Supabase, local sign-up is instant with no email-confirmation step, so it is
+        // safe to create the account here. If the account already exists, this fails
+        // too (email taken) and that error is the one shown - it means the configured
+        // password is wrong.
+      }
+
+      try {
+        const signedUpUser = await auth.signUp(AUTO_LOGIN_EMAIL, AUTO_LOGIN_PASSWORD);
+        if (!cancelled) setUser(signedUpUser);
+      } catch (err: any) {
+        if (!cancelled) {
+          setAuthError(`${err.message || 'Auto sign-in failed'} (${AUTO_LOGIN_EMAIL})`);
+          setLoading(false);
+        }
+      }
     })();
 
-    return autoLoginRef.current;
-  };
-
-  // Listen for Auth status changes
-  useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (!session) {
-        setAccounts([]);
-        setTrades([]);
-        void ensureSignedIn();
-      }
-    });
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-      } else {
-        void ensureSignedIn();
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => { cancelled = true; };
   }, []);
 
   // Map db trade row to frontend Trade object
@@ -200,30 +197,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const loadData = async () => {
       try {
-        // Fetch accounts
-        let { data: dbAccounts, error: accError } = await supabase
-          .from('accounts')
-          .select('*')
-          .order('name');
+        const { accounts: dbAccounts, strategies: dbStrategies, trades: dbTrades } = await bootstrap();
 
-        if (accError) throw accError;
-
-        // If no accounts exist for the user, create default ones
-        if (!dbAccounts || dbAccounts.length === 0) {
-          const defaultAccs = [
-            { user_id: user.id, name: 'Live Account', type: 'Live' as const, color: '#10d982' },
-            { user_id: user.id, name: 'Prop Firm', type: 'Prop' as const, color: '#4f6ef7' }
-          ];
-          const { data: inserted, error: insertError } = await supabase
-            .from('accounts')
-            .insert(defaultAccs)
-            .select();
-
-          if (insertError) throw insertError;
-          dbAccounts = inserted;
-        }
-
-        const formattedAccounts: Account[] = (dbAccounts || []).map(a => ({
+        const formattedAccounts: Account[] = dbAccounts.map(a => ({
           id: a.id,
           name: a.name,
           type: a.type as Account['type'],
@@ -232,71 +208,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         setAccounts(formattedAccounts);
 
-        // Set current account ID
         const savedAccId = localStorage.getItem('tv_curAcc');
         const activeAcc = formattedAccounts.find(a => a.id === savedAccId) || formattedAccounts[0];
         setCurrentAccId(activeAcc.id);
         localStorage.setItem('tv_curAcc', activeAcc.id);
 
-        // Fetch strategies
-        const { data: dbStrats, error: stratError } = await supabase
-          .from('strategies')
-          .select('name')
-          .order('name');
-
-        if (stratError) throw stratError;
-
-        if (dbStrats && dbStrats.length > 0) {
-          setStrategies(dbStrats.map(s => s.name));
-        } else {
-          // insert default strategies
-          const defaultStrats = DEFAULT_STRATEGIES.map(name => ({ user_id: user.id, name }));
-          await supabase.from('strategies').insert(defaultStrats);
-          setStrategies(DEFAULT_STRATEGIES);
-        }
-
-        // Fetch trades
-        const { data: dbTrades, error: tradeError } = await supabase
-          .from('trades')
-          .select(`
-            *,
-            trade_screenshots (*)
-          `)
-          .order('date', { ascending: false });
-
-        if (tradeError) throw tradeError;
-
-        const formattedTrades = (dbTrades || []).map(mapDbTrade);
-        setTrades(formattedTrades);
-
+        setStrategies(dbStrategies);
+        setTrades(dbTrades.map(mapDbTrade));
       } catch (err: any) {
-        console.error('Error loading data from Supabase:', err);
-        showToast('Error syncing with Supabase: ' + err.message, 'error');
+        console.error('Error loading data from the local server:', err);
+        showToast('Error syncing with the local server: ' + err.message, 'error');
       } finally {
         setLoading(false);
       }
     };
 
     loadData();
-    // Keyed on the id so that a second setUser() with an equivalent session object
-    // (getSession + onAuthStateChange both fire on load) does not refetch everything.
+    // Keyed on the id so a second setUser() with an equivalent user does not refetch everything.
   }, [user?.id]);
+
+  const signIn = async (email: string, password: string) => {
+    const signedInUser = await auth.signIn(email, password);
+    setAuthError(null);
+    setUser(signedInUser);
+  };
+
+  const signUp = async (email: string, password: string) => {
+    const signedUpUser = await auth.signUp(email, password);
+    setAuthError(null);
+    setUser(signedUpUser);
+  };
 
   // Account actions
   const addAccount = async (name: string, type: Account['type'], color: string) => {
     if (!user) return;
     try {
-      const { data, error } = await supabase
-        .from('accounts')
-        .insert([{ user_id: user.id, name, type, color }])
-        .select();
-
-      if (error) throw error;
-      if (data && data[0]) {
-        const newAcc: Account = { id: data[0].id, name: data[0].name, type: data[0].type, color: data[0].color };
-        setAccounts(prev => [...prev, newAcc]);
-        showToast('Account added!');
-      }
+      const data = await accountsApi.create({ name, type, color });
+      const newAcc: Account = { id: data.id, name: data.name, type: data.type, color: data.color };
+      setAccounts(prev => [...prev, newAcc]);
+      showToast('Account added!');
     } catch (err: any) {
       showToast(err.message, 'error');
     }
@@ -305,12 +255,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const renameAccount = async (id: string, name: string) => {
     if (!user) return;
     try {
-      const { error } = await supabase
-        .from('accounts')
-        .update({ name })
-        .eq('id', id);
-
-      if (error) throw error;
+      await accountsApi.rename(id, name);
       setAccounts(prev => prev.map(a => a.id === id ? { ...a, name } : a));
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -324,12 +269,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
     try {
-      const { error } = await supabase
-        .from('accounts')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
+      await accountsApi.remove(id);
 
       const remaining = accounts.filter(a => a.id !== id);
       setAccounts(remaining);
@@ -351,11 +291,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
     try {
-      const { error } = await supabase
-        .from('strategies')
-        .insert([{ user_id: user.id, name }]);
-
-      if (error) throw error;
+      await strategiesApi.create(name);
       setStrategies(prev => [...prev, name]);
       showToast('Strategy added!');
     } catch (err: any) {
@@ -366,12 +302,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteStrategy = async (name: string) => {
     if (!user) return;
     try {
-      const { error } = await supabase
-        .from('strategies')
-        .delete()
-        .eq('name', name);
-
-      if (error) throw error;
+      await strategiesApi.remove(name);
       setStrategies(prev => prev.filter(s => s !== name));
       showToast('Strategy removed');
     } catch (err: any) {
@@ -379,70 +310,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  /** Builds the snake_case API payload shared by addTrade/updateTrade for a full trade. */
+  const toTradePayload = (t: Omit<Trade, 'id'>) => ({
+    account_id: t.accountId,
+    date: t.date,
+    instrument: t.instrument,
+    direction: t.direction,
+    session: t.session,
+    entry: t.entry ? parseFloat(t.entry) : null,
+    exit_price: t.exit ? parseFloat(t.exit) : null,
+    sl: t.sl ? parseFloat(t.sl) : null,
+    tp: t.tp ? parseFloat(t.tp) : null,
+    lots: t.lots ? parseFloat(t.lots) : null,
+    pl: t.pl,
+    risk: t.risk ? parseFloat(t.risk) : null,
+    rr: t.rr ? parseFloat(t.rr) : null,
+    setup: t.setup,
+    result: t.result,
+    grade: t.grade,
+    emotion_before: t.emotionBefore,
+    emotion_after: t.emotionAfter,
+    mistakes: t.mistakes,
+    pre_notes: t.preNotes,
+    post_notes: t.postNotes,
+    screenshots: (t.screenshots || []).map(s => ({ url: s.dataUrl, name: s.name }))
+  });
+
   // Trade actions
   const addTrade = async (newTradeData: Omit<Trade, 'id'>) => {
     if (!user) return;
     try {
-      // 1. Insert trade
-      const { data: dbTrade, error } = await supabase
-        .from('trades')
-        .insert([{
-          user_id: user.id,
-          account_id: newTradeData.accountId,
-          date: newTradeData.date,
-          instrument: newTradeData.instrument,
-          direction: newTradeData.direction,
-          session: newTradeData.session,
-          entry: newTradeData.entry ? parseFloat(newTradeData.entry) : null,
-          exit_price: newTradeData.exit ? parseFloat(newTradeData.exit) : null,
-          sl: newTradeData.sl ? parseFloat(newTradeData.sl) : null,
-          tp: newTradeData.tp ? parseFloat(newTradeData.tp) : null,
-          lots: newTradeData.lots ? parseFloat(newTradeData.lots) : null,
-          pl: newTradeData.pl,
-          risk: newTradeData.risk ? parseFloat(newTradeData.risk) : null,
-          rr: newTradeData.rr ? parseFloat(newTradeData.rr) : null,
-          setup: newTradeData.setup,
-          result: newTradeData.result,
-          grade: newTradeData.grade,
-          emotion_before: newTradeData.emotionBefore,
-          emotion_after: newTradeData.emotionAfter,
-          mistakes: newTradeData.mistakes,
-          pre_notes: newTradeData.preNotes,
-          post_notes: newTradeData.postNotes
-        }])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // 2. Insert screenshots if any
-      const screenshotsInserted: Screenshot[] = [];
-      if (newTradeData.screenshots && newTradeData.screenshots.length > 0) {
-        const shotRows = newTradeData.screenshots.map(s => ({
-          trade_id: dbTrade.id,
-          url: s.dataUrl,
-          name: s.name
-        }));
-
-        const { data: dbShots, error: shotError } = await supabase
-          .from('trade_screenshots')
-          .insert(shotRows)
-          .select();
-
-        if (shotError) throw shotError;
-        if (dbShots) {
-          dbShots.forEach(s => screenshotsInserted.push({ dataUrl: s.url, name: s.name }));
-        }
-      }
-
-      // Add to state
-      const createdTrade: Trade = {
-        ...newTradeData,
-        id: dbTrade.id,
-        screenshots: screenshotsInserted
-      };
-
-      setTrades(prev => [createdTrade, ...prev]);
+      const dbTrade = await tradesApi.create(toTradePayload(newTradeData));
+      setTrades(prev => [mapDbTrade(dbTrade), ...prev]);
       showToast('Trade saved!');
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -475,53 +374,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (updatedFields.mistakes !== undefined) payload.mistakes = updatedFields.mistakes;
       if (updatedFields.preNotes !== undefined) payload.pre_notes = updatedFields.preNotes;
       if (updatedFields.postNotes !== undefined) payload.post_notes = updatedFields.postNotes;
-
-      // Update trade in Supabase
-      const { error } = await supabase
-        .from('trades')
-        .update(payload)
-        .eq('id', id);
-
-      if (error) throw error;
-
-      // Handle screenshots updates if present in fields
-      let finalScreenshots = updatedFields.screenshots;
       if (updatedFields.screenshots !== undefined) {
-        // Delete all old screenshots for this trade
-        await supabase
-          .from('trade_screenshots')
-          .delete()
-          .eq('trade_id', id);
-
-        if (updatedFields.screenshots.length > 0) {
-          const shotRows = updatedFields.screenshots.map(s => ({
-            trade_id: id,
-            url: s.dataUrl,
-            name: s.name
-          }));
-          const { data: dbShots, error: shotError } = await supabase
-            .from('trade_screenshots')
-            .insert(shotRows)
-            .select();
-
-          if (shotError) throw shotError;
-          if (dbShots) {
-            finalScreenshots = dbShots.map(s => ({ dataUrl: s.url, name: s.name }));
-          }
-        }
+        payload.screenshots = updatedFields.screenshots.map(s => ({ url: s.dataUrl, name: s.name }));
       }
 
-      setTrades(prev => prev.map(t => {
-        if (t.id === id) {
-          const updated: Trade = { ...t, ...updatedFields };
-          if (finalScreenshots !== undefined) {
-            updated.screenshots = finalScreenshots;
-          }
-          return updated;
-        }
-        return t;
-      }));
-
+      const dbTrade = await tradesApi.update(id, payload);
+      const updated = mapDbTrade(dbTrade);
+      setTrades(prev => prev.map(t => t.id === id ? updated : t));
       showToast('Trade updated!');
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -531,12 +390,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteTrade = async (id: string) => {
     if (!user) return;
     try {
-      const { error } = await supabase
-        .from('trades')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
+      await tradesApi.remove(id);
       setTrades(prev => prev.filter(t => t.id !== id));
       showToast('Trade deleted');
     } catch (err: any) {
@@ -547,12 +401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const bulkDeleteTrades = async (ids: string[]) => {
     if (!user) return;
     try {
-      const { error } = await supabase
-        .from('trades')
-        .delete()
-        .in('id', ids);
-
-      if (error) throw error;
+      await tradesApi.bulkDelete(ids);
       setTrades(prev => prev.filter(t => !ids.includes(t.id)));
       showToast(`Deleted ${ids.length} trades`);
     } catch (err: any) {
@@ -565,8 +414,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const trimmed = name.trim();
     if (!user || !trimmed || strategies.includes(trimmed)) return;
     try {
-      const { error } = await supabase.from('strategies').insert([{ user_id: user.id, name: trimmed }]);
-      if (error) throw error;
+      await strategiesApi.create(trimmed);
       setStrategies(prev => [...prev, trimmed]);
     } catch {
       // A missing strategy only affects the Trade Form dropdown; the trade still saves
@@ -577,11 +425,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /**
    * Writes a batch of confirmed trades, each with the screenshot it was paired with.
    *
-   * One trade at a time, so progress is honest and Storage is not swamped. A bad row
-   * never takes the batch down - its error is collected and the run carries on. When an
-   * upload fails the trade is still saved and the failure reported: losing a trade to
-   * save an image would be the wrong way round, and the image can be attached later by
-   * editing the trade.
+   * One trade at a time, so progress is honest and the uploads folder is not swamped. A
+   * bad row never takes the batch down - its error is collected and the run carries on.
+   * When an upload fails the trade is still saved and the failure reported: losing a
+   * trade to save an image would be the wrong way round, and the image can be attached
+   * later by editing the trade.
    */
   const importTrades = async (
     items: ImportItem[],
@@ -599,86 +447,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const item = items[i];
       const t = item.trade;
       try {
-        const { data: dbTrade, error } = await supabase
-          .from('trades')
-          .insert([{
-            user_id: user.id,
-            account_id: item.accountId,
-            date: t.date,
-            instrument: t.instrument,
-            direction: t.direction,
-            session: t.session,
-            entry: t.entry,
-            exit_price: t.exit_price,
-            sl: t.sl,
-            tp: t.tp,
-            lots: t.lots,
-            pl: t.pl,
-            risk: t.risk,
-            rr: t.rr,
-            setup: t.setup,
-            result: t.result,
-            // grade, emotion_* and the note columns are left unset on purpose. grade in
-            // particular carries a CHECK constraint of 'A'..'F', which an empty string
-            // would violate - NULL is the only valid "not recorded".
-            grade: null,
-            emotion_before: null,
-            emotion_after: null,
-            mistakes: null,
-            pre_notes: null,
-            post_notes: null
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        const screenshots: Screenshot[] = [];
+        let screenshotUrl: string | null = null;
+        let screenshotError: string | null = null;
         if (item.file) {
           try {
-            const url = await uploadScreenshot(item.file);
-            // trade_screenshots RLS resolves through trades.user_id, so the trade has to
-            // exist before its screenshot row can be written.
-            const { error: shotError } = await supabase
-              .from('trade_screenshots')
-              .insert([{ trade_id: dbTrade.id, url, name: item.file.name }]);
-            if (shotError) throw shotError;
-
-            screenshots.push({ dataUrl: url, name: item.file.name });
-            outcome.screenshotsAttached++;
+            screenshotUrl = await uploadScreenshot(item.file);
           } catch (shotErr: any) {
-            outcome.failures.push({
-              ref: item.ref,
-              error: `Trade saved, but the screenshot could not be attached: ${shotErr.message || shotErr}`
-            });
+            screenshotError = shotErr.message || String(shotErr);
           }
         }
 
-        created.push({
-          id: dbTrade.id,
-          accountId: item.accountId,
+        const dbTrade = await tradesApi.create({
+          account_id: item.accountId,
           date: t.date,
           instrument: t.instrument,
           direction: t.direction,
           session: t.session,
-          entry: t.entry?.toString() ?? '',
-          exit: t.exit_price?.toString() ?? '',
-          sl: t.sl?.toString() ?? '',
-          tp: t.tp?.toString() ?? '',
-          lots: t.lots?.toString() ?? '',
+          entry: t.entry,
+          exit_price: t.exit_price,
+          sl: t.sl,
+          tp: t.tp,
+          lots: t.lots,
           pl: t.pl,
-          risk: t.risk?.toString() ?? '',
-          rr: t.rr?.toString() ?? '',
+          risk: t.risk,
+          rr: t.rr,
           setup: t.setup,
           result: t.result,
-          grade: '',
-          emotionBefore: '',
-          emotionAfter: '',
-          mistakes: '',
-          preNotes: '',
-          postNotes: '',
-          screenshots
+          // grade, emotion_* and the note columns are left unset on purpose. grade in
+          // particular carries a CHECK constraint of 'A'..'F', which an empty string
+          // would violate - NULL is the only valid "not recorded".
+          grade: null,
+          emotion_before: null,
+          emotion_after: null,
+          mistakes: null,
+          pre_notes: null,
+          post_notes: null,
+          screenshots: screenshotUrl && item.file ? [{ url: screenshotUrl, name: item.file.name }] : []
         });
+
+        if (screenshotUrl) outcome.screenshotsAttached++;
+        if (screenshotError) {
+          outcome.failures.push({
+            ref: item.ref,
+            error: `Trade saved, but the screenshot could not be attached: ${screenshotError}`
+          });
+        }
+
+        created.push(mapDbTrade(dbTrade));
         outcome.imported++;
       } catch (err: any) {
         outcome.failures.push({ ref: item.ref, error: err.message || String(err) });
@@ -692,9 +507,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const signOut = async () => {
-    // Leave autoLoginRef resolved so the sign-out is not immediately undone by a
-    // fresh auto sign-in; a page reload starts the cycle over.
-    await supabase.auth.signOut();
+    await auth.signOut();
+    // Auto sign-in only runs once per page load (see the session-bootstrap effect above),
+    // so signing out here sticks until the page is reloaded rather than being immediately
+    // undone by a fresh auto sign-in.
+    setUser(null);
+    setAccounts([]);
+    setTrades([]);
   };
 
   const seedDemoData = async () => {
@@ -711,9 +530,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tradeDate.setDate(now.getDate() - i);
         const isWin = Math.random() > 0.4;
         const pl = isWin ? (Math.random() * 500 + 100) : -(Math.random() * 300 + 50);
-        
+
         demoTradesToInsert.push({
-          user_id: user.id,
           account_id: demoAccount.id,
           date: tradeDate.toISOString(),
           instrument: ['EURUSD', 'GBPUSD', 'NAS100', 'XAUUSD', 'BTCUSD'][Math.floor(Math.random() * 5)],
@@ -738,14 +556,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
-      const { data: dbTrades, error: tradeInsertError } = await supabase
-        .from('trades')
-        .insert(demoTradesToInsert)
-        .select();
-
-      if (tradeInsertError) throw tradeInsertError;
-
-      const formatted = (dbTrades || []).map(mapDbTrade);
+      const dbTrades = await tradesApi.bulkCreate(demoTradesToInsert);
+      const formatted = dbTrades.map(mapDbTrade);
       setTrades(prev => [...formatted, ...prev]);
       showToast('Demo data seeded!');
     } catch (err: any) {
@@ -771,6 +583,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleTheme,
       toast,
       showToast,
+      signIn,
+      signUp,
       addAccount,
       renameAccount,
       deleteAccount,

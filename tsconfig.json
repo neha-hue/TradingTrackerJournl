@@ -18,7 +18,10 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Keep server-only @types (node, express, multer, ...) out of the browser build */
+    "types": []
   },
   "include": ["src"]
 }
