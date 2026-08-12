@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { supabase } from '../../lib/supabase';
+import { uploadScreenshot } from '../../lib/storage';
 import { Screenshot } from '../../lib/types';
 import Modal from '../shared/Modal';
 
@@ -126,24 +126,6 @@ export const TradeForm: React.FC<TradeFormProps> = ({ editTradeId, onSuccess }) 
     };
   }, []);
 
-  // Upload a single file to Supabase Storage, return public URL
-  const uploadToStorage = async (file: File): Promise<string> => {
-    const ext = file.name.split('.').pop() || 'png';
-    const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-
-    const { data, error } = await supabase.storage
-      .from('screenshots')
-      .upload(fileName, file, { cacheControl: '3600', upsert: false });
-
-    if (error) throw error;
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('screenshots')
-      .getPublicUrl(data.path);
-
-    return publicUrl;
-  };
-
   const handleScreenshots = (files: FileList) => {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
@@ -181,13 +163,13 @@ export const TradeForm: React.FC<TradeFormProps> = ({ editTradeId, onSuccess }) 
 
     setUploading(true);
     try {
-      // Upload new (blob) screenshots to Supabase Storage
+      // Upload new (blob) screenshots to the local server
       const uploadedShots: Screenshot[] = [];
       for (const shot of pendingShots) {
         if (shot.dataUrl.startsWith('blob:')) {
           const file = fileMapRef.current.get(shot.dataUrl);
           if (file) {
-            const url = await uploadToStorage(file);
+            const url = await uploadScreenshot(file);
             uploadedShots.push({ dataUrl: url, name: shot.name });
           }
         } else {

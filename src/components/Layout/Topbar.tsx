@@ -22,6 +22,8 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar }) => {
         return 'Trade Log';
       case 'add-trade':
         return 'Add New Trade';
+      case 'import':
+        return 'Bulk Import';
       case 'weekly':
         return 'Weekly Results';
       case 'monthly':

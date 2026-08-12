@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { AUTO_LOGIN_ENABLED } from '../../lib/supabase';
+import { AUTO_LOGIN_ENABLED } from '../../lib/config';
 import { Account } from '../../lib/types';
 import Modal from '../shared/Modal';
 
@@ -35,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, setIsOpen }) => {
     { id: 'calendar', label: 'Monthly Calendar', icon: 'fa-calendar-days' },
     { id: 'journal', label: 'Trade Log', icon: 'fa-list' },
     { id: 'add-trade', label: 'Add New Trade', icon: 'fa-plus' },
+    { id: 'import', label: 'Bulk Import', icon: 'fa-file-import' },
   ];
 
   const resultsItems = [
