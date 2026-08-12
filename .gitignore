@@ -26,6 +26,9 @@
 /server/uploads/*
 !/server/uploads/.gitkeep
 
+# local backups (npm run backup)
+/backups
+
 # misc
 .DS_Store
 *.pem

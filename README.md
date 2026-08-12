@@ -50,6 +50,32 @@ On a brand-new database this account is created automatically on first run; on l
 - `npm run build` - type-checks and builds the frontend to `dist/` (frontend only).
 - `npm run db:migrate` - (re-)applies `server/db/schema.sql`. Safe to run any time; it only creates tables that don't already exist.
 
+## Backups
+
+```bash
+npm run backup                    # -> backups/2026-08-12_1458/  (database + screenshots)
+npm run restore                   # lists available backups
+npm run restore 2026-08-12_1458   # restores that one
+```
+
+`npm run backup` is safe to run while the app is running: the database is copied with
+SQLite's `VACUUM INTO`, which writes a consistent snapshot instead of the possibly
+half-written file a plain copy can produce. The 10 most recent backups are kept
+(`KEEP=20 npm run backup` to keep more).
+
+`npm run restore` needs the server stopped first - Windows will not let an open database
+file be overwritten, and the script stops with an explanation rather than doing anything
+half-way. It copies the current database and uploads to `backups/_before-restore-<stamp>/`
+before overwriting, so a restore is itself undoable.
+
+By default backups land in `backups/` on the same disk, which protects against accidental
+deletion but not against that disk failing. Point `BACKUP_DIR` somewhere else - another
+drive, or a synced folder - for real safety:
+
+```bash
+BACKUP_DIR=D:/journal-backups npm run backup
+```
+
 ## Resetting the database
 
 Delete the database file and re-migrate:
